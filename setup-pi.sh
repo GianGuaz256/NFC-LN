@@ -167,13 +167,13 @@ configure_user_groups() {
 
 # Install Python dependencies
 install_python_deps() {
-    log_info "Installing Python dependencies..."
+    log_info "Checking Python dependencies..."
     
     if [ -f "requirements.txt" ]; then
-        pip3 install --user -r requirements.txt
-        log_info "Python dependencies installed successfully"
+        log_info "Python dependencies will be installed inside Docker container"
+        log_info "No need to install on host system when using Docker"
     else
-        log_warn "requirements.txt not found, skipping Python dependencies installation"
+        log_warn "requirements.txt not found"
     fi
 }
 
