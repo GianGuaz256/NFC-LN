@@ -13,8 +13,8 @@ rich==13.7.0
 
 # Configuration
 python-dotenv==1.0.1
-pydantic==2.6.1
-pydantic-settings==2.1.0
+pydantic==2.10.5
+pydantic-settings==2.7.1
 
 # Utilities
 bech32==1.2.0
