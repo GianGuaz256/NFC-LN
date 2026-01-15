@@ -1,5 +1,5 @@
 # NFC Hardware
-py532lib==0.3.0
+adafruit-circuitpython-pn532==2.3.9
 ndeflib==0.3.3
 spidev==3.6
 smbus2==0.4.3
