@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  nfc-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ln-nfc-service
+    restart: unless-stopped
+
+    # Privileged mode for hardware access
+    privileged: true
+
+    # Device access for I2C and SPI
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+      - /dev/gpiomem:/dev/gpiomem
+
+    # Environment variables from .env file
+    env_file:
+      - .env
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    # Volume mounts
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - /dev:/dev
+
+    # Network mode for easier debugging
+    network_mode: host
+
+    # Override user to root for device access
+    user: root
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
