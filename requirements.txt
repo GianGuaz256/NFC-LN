@@ -1,5 +1,5 @@
 # NFC Hardware
-pn532==1.1
+py532lib==0.3.0
 ndeflib==0.3.3
 spidev==3.6
 smbus2==0.4.3

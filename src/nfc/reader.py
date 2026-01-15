@@ -6,11 +6,15 @@ from typing import Optional, Literal
 from contextlib import contextmanager
 
 try:
-    from pn532 import PN532_I2C, PN532_SPI, PN532
+    from py532lib.i2c import Pn532_i2c
+    from py532lib.spi import Pn532_spi
+    from py532lib.mifare import Mifare
+    PN532_AVAILABLE = True
 except ImportError:
-    PN532_I2C = None
-    PN532_SPI = None
-    PN532 = None
+    PN532_AVAILABLE = False
+    Pn532_i2c = None
+    Pn532_spi = None
+    Mifare = None
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +66,8 @@ class NFCReader:
             reset_pin: GPIO pin for reset (optional)
             req_pin: GPIO pin for request (optional)
         """
-        if PN532 is None:
-            raise ImportError("pn532 library not installed. Run: pip install pn532")
+        if not PN532_AVAILABLE:
+            raise ImportError("py532lib library not installed. Run: pip install py532lib")
         
         self.interface = interface
         self.i2c_bus = i2c_bus
@@ -71,7 +75,8 @@ class NFCReader:
         self.spi_device = spi_device
         self.reset_pin = reset_pin
         self.req_pin = req_pin
-        self._pn532: Optional[PN532] = None
+        self._pn532 = None
+        self._mifare = None
         self._initialized = False
         
         logger.info(f"NFCReader initialized with {interface.upper()} interface")
@@ -91,13 +96,16 @@ class NFCReader:
             else:
                 raise ValueError(f"Unsupported interface: {self.interface}")
             
-            # Configure PN532
-            self._pn532.SAM_configuration()
+            # Initialize Mifare helper
+            self._mifare = Mifare()
             self._initialized = True
             
             # Get firmware version for verification
-            ic, ver, rev, support = self._pn532.get_firmware_version()
-            logger.info(f"PN532 Firmware version: {ver}.{rev}")
+            try:
+                version = self._pn532.getFirmwareVersion()
+                logger.info(f"PN532 Firmware version: {version}")
+            except Exception as e:
+                logger.warning(f"Could not read firmware version: {e}")
             
         except Exception as e:
             logger.error(f"Failed to connect to PN532: {e}")
@@ -105,27 +113,13 @@ class NFCReader:
     
     def _connect_i2c(self) -> None:
         """Connect via I2C interface."""
-        try:
-            from smbus2 import SMBus
-        except ImportError:
-            raise ImportError("smbus2 library not installed. Run: pip install smbus2")
-        
         logger.info(f"Connecting to PN532 via I2C (bus {self.i2c_bus})...")
-        i2c = SMBus(self.i2c_bus)
-        self._pn532 = PN532_I2C(i2c, reset=self.reset_pin, req=self.req_pin)
+        self._pn532 = Pn532_i2c(self.i2c_bus)
     
     def _connect_spi(self) -> None:
         """Connect via SPI interface."""
-        try:
-            import spidev
-        except ImportError:
-            raise ImportError("spidev library not installed. Run: pip install spidev")
-        
         logger.info(f"Connecting to PN532 via SPI (bus {self.spi_bus}, device {self.spi_device})...")
-        spi = spidev.SpiDev()
-        spi.open(self.spi_bus, self.spi_device)
-        spi.max_speed_hz = 1000000
-        self._pn532 = PN532_SPI(spi, reset=self.reset_pin, req=self.req_pin)
+        self._pn532 = Pn532_spi()
     
     def disconnect(self) -> None:
         """Disconnect from the NFC reader."""
@@ -161,10 +155,11 @@ class NFCReader:
         
         while time.time() - start_time < timeout:
             try:
-                uid = self._pn532.read_passive_target(timeout=0.5)
+                uid = self._pn532.readPassiveTarget()
                 if uid:
-                    logger.info(f"Tag detected: UID={uid.hex()}")
-                    return uid
+                    uid_bytes = bytes(uid)
+                    logger.info(f"Tag detected: UID={uid_bytes.hex()}")
+                    return uid_bytes
             except Exception as e:
                 logger.debug(f"Error reading tag: {e}")
             
@@ -221,24 +216,30 @@ class NFCReader:
         data = bytearray()
         
         # Read capability container (page 3)
-        cc = self._pn532.ntag2xx_read_block(3)
-        if not cc or len(cc) < 4:
-            raise NFCReadError("Failed to read capability container")
+        try:
+            cc = self._mifare.read_block(block_number=3)
+            if not cc or len(cc) < 4:
+                raise NFCReadError("Failed to read capability container")
+        except Exception as e:
+            raise NFCReadError(f"Failed to read capability container: {e}")
         
         # Read NDEF TLV (starting at page 4)
         page = 4
         max_pages = 135  # NTAG216 max
         
         while page < max_pages:
-            block = self._pn532.ntag2xx_read_block(page)
-            if not block:
-                break
-            
-            data.extend(block)
-            page += 1
-            
-            # Check for NDEF terminator (0xFE)
-            if 0xFE in block:
+            try:
+                block = self._mifare.read_block(block_number=page)
+                if not block:
+                    break
+                
+                data.extend(block)
+                page += 1
+                
+                # Check for NDEF terminator (0xFE)
+                if 0xFE in block:
+                    break
+            except Exception:
                 break
         
         return bytes(data)
@@ -303,13 +304,14 @@ class NFCReader:
         # Write data starting at page 4
         page = 4
         for i in range(0, len(tlv_data), 4):
-            block = tlv_data[i:i+4]
+            block = list(tlv_data[i:i+4])
             if len(block) < 4:
-                block = block + bytes(4 - len(block))
+                block = block + [0x00] * (4 - len(block))
             
-            success = self._pn532.ntag2xx_write_block(page, block)
-            if not success:
-                raise NFCWriteError(f"Failed to write page {page}")
+            try:
+                self._mifare.write_block(block_number=page, data=block)
+            except Exception as e:
+                raise NFCWriteError(f"Failed to write page {page}: {e}")
             
             page += 1
     
@@ -338,15 +340,15 @@ class NFCReader:
             logger.info("Clearing NFC tag...")
             
             # Write empty NDEF message
-            empty_ndef = bytes([0x03, 0x00, 0xFE, 0x00])  # Empty TLV
+            empty_ndef = [0x03, 0x00, 0xFE, 0x00]  # Empty TLV
             
             # Write to page 4
-            success = self._pn532.ntag2xx_write_block(4, empty_ndef)
-            if success:
+            try:
+                self._mifare.write_block(block_number=4, data=empty_ndef)
                 logger.info("Tag cleared successfully")
                 return True
-            else:
-                raise NFCWriteError("Failed to clear tag")
+            except Exception as e:
+                raise NFCWriteError(f"Failed to clear tag: {e}")
                 
         except Exception as e:
             logger.error(f"Failed to clear tag: {e}")
@@ -378,7 +380,7 @@ class NFCReader:
         
         try:
             # Try to read capability container
-            cc = self._pn532.ntag2xx_read_block(3)
+            cc = self._mifare.read_block(block_number=3)
             if cc and len(cc) >= 4:
                 info["type"] = "NTAG"
                 info["ndef_capable"] = cc[0] == 0xE1
